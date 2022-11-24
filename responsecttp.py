@@ -1,41 +1,106 @@
-from http.server import BaseHTTPRequestHandler, HTTPServer # python3
-class HandleRequests(BaseHTTPRequestHandler):
-    def _set_headers(self):
-        self.send_response(200)
-        self.send_header('Content-type','multipart/mixed; boundary="boundary"')
-        self.send_header('Request-Taint','1')
-        self.end_headers()
+import requests
+import random
 
-    def _set_body(self):
-        self.wfile.write(bytes("<html><head><title>Title goes here.</title></head>","utf-8"))
-        self.wfile.write(bytes("<body><p>'Name':'Data', 'non-private' : 'Data' , 'surname':'Data'<p>","utf-8"))
-        taintdetails="1555-1134"
-        self.wfile.write(bytes("--boudary content-Type: application/"+taintdetails+"--boundry","utf-8"))
-        self.wfile.close()
+def Taintgenerator(intervals,encoding_type):
+    if encoding_type == "x-taint-detailed":
+        pass
+    elif encoding_type == "x-taint-bin" :
+        result=""
+        for x in intervals:
+            result=result+str(encode_unsigned_leb128(x[0]))
+            result=result+str(encode_unsigned_leb128(x[1]))
+    else :
+        print ('wrong Taint type - application stopped')
+    return str(result).replace("b\'","").replace("\'","")
 
-    def do_GET(self):
-        #get body content
-        content_len = int(self.headers.get('Content-Length'))
-        getBody=str(self.rfile.read(content_len))
-        #split the string and print it 
-        d = dict(x.split("=") for x in getBody.split("&")) 
-        for k, v in d.items():
-            print(k, v)   
-        #set Body/headers and respond
+def DataGenerator(Lengthofpacket):
+    Data=""
+    Taintintervals =[]
+    last="X"
+    for i in range(Lengthofpacket):
 
-        self._set_headers()
-        self._set_body()
+        if random.randint(0, 1) == 0 :
+            if last == "X":
+                Taintintervals.append([i+1,1])
+                #Taintintervals[len(Taintintervals)-1]
+            else:
+                Taintintervals[len(Taintintervals)-1]=[Taintintervals[len(Taintintervals)-1][0],i-Taintintervals[len(Taintintervals)-1][0]+2]
 
-    def do_POST(self):
-        #Reads post request body    
-        content_len = int(self.headers.getheader('content-length', 0))
-        post_body = self.rfile.read(content_len)
-        self.wfile.write(bytes("received post request:<br>{}".format(post_body)))
-        self._set_headers()
+            Data=Data+"S"
+            last="S"
+        else:
+            Data=Data+"X"
+            last="X"   
+    return Data , Taintintervals
+            
+def encode_unsigned_leb128(number):
+    result = bytearray()
 
-    def do_PUT(self):
-        self.do_POST()
+    # While number is greater than a byte
+    while number.bit_length() > 7:
+        # Get first 7 bits and append 1 on 8th bit
+        single_byte = (number & 0b01111111) | 0b10000000
+        # Append the byte to result
+        result.append(single_byte)
+        # Truncate right 7 bits
+        number = number >> 7
 
-host = ''
-port = 8081
-HTTPServer((host, port), HandleRequests).serve_forever()
+    # Append remaining byte to result
+    result.append(number)
+
+    # As we appended earlier no need to reverse the bytes
+    return bytes(result)
+
+def decode_unsigned_leb128(byte_array, offset=0):
+    needle = offset
+    pair_count = 0
+    result = 0
+
+    while True:
+        single_byte = byte_array[needle]
+
+        # If first bit is 1
+        if single_byte & 0b10000000 == 0:
+            break
+
+        # Remove first bit
+        single_byte = single_byte & 0b01111111
+
+        # Push number of bits we already have calculated
+        single_byte = single_byte << (pair_count * 7)
+
+        # Merge byte with result
+        result = result | single_byte
+
+        needle = needle + 1
+        pair_count = pair_count + 1
+
+    # Merge last byte with result
+    single_byte = single_byte << (pair_count * 7)
+    result = result | single_byteq
+
+    return result
+
+data,inters = DataGenerator(20000)
+
+print (data)
+print (inters)
+
+url = 'http://localhost:8081'
+headers = {'Request-Taint': '1'} # if you put it 0 your turn off the CTTP support 
+body = {'data':data}
+
+proxy_servers = {
+   'http': 'http://localhost:8080',
+}
+   
+taintspec=open('test.txt','w') 
+
+taint=Taintgenerator(inters,"x-taint-bin")
+print (taint)
+taintspec.write("application/x-taint-bin"+taint)
+taintspec.close()
+files = {'Content-Type': open('test.txt', 'rb')}
+
+r=requests.get(url, headers=headers, data=body ,proxies=proxy_servers , files=files)
+print(r)
